@@ -1,19 +1,127 @@
+
 <html>
 <head>
 <title>Lab 2 for Web GIS</title>
+
+<meta name="viewport" content="initial-scale=1.0, user-scalable=no" />
+<style type="text/css">
+  html { height: 100% }
+  body { height: 80%; margin: 0px; padding: 40px }
+  .map_canvas { width: 512px; height: 512px }
+</style>
+
+<script type="text/javascript"
+    src="https://maps.googleapis.com/maps/api/js?key=YOUR_API_KEY">
+</script>
+
+<script type="text/javascript">
+function initialize() {
+
+    var latlng1 = new google.maps.LatLng(36.07353372296458, -79.09991718796209);
+    var myOptions1 = {
+        zoom: 18,
+        center: latlng1,
+        mapTypeId: google.maps.MapTypeId.HYBRID
+    };
+    var map1 = new google.maps.Map(document.getElementById("map_canvas1"), myOptions1);
+
+    var latlng2 = new google.maps.LatLng(22.283782191095007, 114.17287785682427);
+    var myOptions2 = {
+        zoom: 16,
+        center: latlng2,
+        mapTypeId: google.maps.MapTypeId.HYBRID
+    };
+    var map2 = new google.maps.Map(document.getElementById("map_canvas2"), myOptions2);
+
+    var latlng3 = new google.maps.LatLng(40.75666676799462, -73.98630881600076);
+    var myOptions3 = {
+        zoom: 17,
+        center: latlng3,
+        mapTypeId: google.maps.MapTypeId.HYBRID
+    };
+    var map3 = new google.maps.Map(document.getElementById("map_canvas3"), myOptions3);
+
+    var latlng4 = new google.maps.LatLng(-17.924656479767506, 25.856894550589708);
+    var myOptions4 = {
+        zoom: 17,
+        center: latlng4,
+        mapTypeId: google.maps.MapTypeId.HYBRID
+    };
+    var map4 = new google.maps.Map(document.getElementById("map_canvas4"), myOptions4);
+
+    var latlng5 = new google.maps.LatLng(35.676126401071905, 139.69940982550114);
+    var myOptions5 = {
+        zoom: 17,
+        center: latlng5,
+        mapTypeId: google.maps.MapTypeId.HYBRID
+    };
+    var map5 = new google.maps.Map(document.getElementById("map_canvas5"), myOptions5);
+
+}
+</script>
 </head>
-<body>
-<h1>Lab X for Web GIS</h1>
+
+<body onload="initialize()">
+<h1>Lab 2 for Web GIS</h1>
 <h3>Name: Colby Kimball</h3>
-<!-- This code tells the web browser that I am going to use JavaScript to create dynamic
-  HTML and the current date information will be written into the HTML file-->
-<h3>Current Date is: </h3>
+<!-- This page uses JavaScript to create dynamic HTML and interactive maps. -->
+
+<h3>Current Date is:</h3>
 <script type="text/javascript">
 document.write(Date());
 </script>
-  <h3>Generate a random number: </h3>
+
+<h3>Generate a random number:</h3>
 <script type="text/javascript">
 document.write(Math.random());
 </script>
+
+<h3>Define variables and perform calculation:</h3>
+<script type="text/javascript">
+var str1 = "Hello World";
+document.write(str1);
+document.write("<br>");
+
+var x = 5;
+document.write(x);
+document.write("<br>");
+
+var y = 10;
+var z = x + y;
+document.write(z);
+document.write("<br>");
+
+var X1 = 200;
+var X2 = 300;
+var X3 = X1 * X2;
+document.write("X3 = " + X3);
+document.write("<br>");
+</script>
+
+<h3>Define a function:</h3>
+<script type="text/javascript">
+function sum3(x1, x2, x3) {
+    var sum = x1 + x2 + x3;
+    return sum;
+}
+var k = sum3(5, 6, 7);
+document.write(k);
+</script>
+
+<h3>Map 1</h3>
+<div id="map_canvas1" class="map_canvas"></div>
+
+<h3>Map 2</h3>
+<div id="map_canvas2" class="map_canvas"></div>
+
+<h3>Map 3</h3>
+<div id="map_canvas3" class="map_canvas"></div>
+
+<h3>Map 4</h3>
+<div id="map_canvas4" class="map_canvas"></div>
+
+<h3>Map 5</h3>
+<div id="map_canvas5" class="map_canvas"></div>
+
 </body>
 </html>
