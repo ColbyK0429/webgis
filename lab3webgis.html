@@ -1,0 +1,186 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WebGIS Lab 3 - OpenLayers</title>
+
+<!-- OpenLayers stylesheet -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@v10.2.1/ol.css">
+
+<!-- OpenLayers JavaScript library -->
+<script src="https://cdn.jsdelivr.net/npm/ol@v10.2.1/dist/ol.js"></script>
+
+<style>
+#map {
+    width: 100%;
+    height: 600px;
+}
+</style>
+</head>
+
+<body>
+<h2>WebGIS Lab 3 - OpenLayers</h2>
+<h4>Author: Colby Kimball</h4>
+
+
+<div style="margin: 10px 0;">
+<button id="heatmapButton">Earthquake Heat Map</button>
+<button id="clusterButton">Earthquake Cluster Map</button>
+<button id="ncButton">North Carolina Map</button>
+</div>
+
+<div id="map"></div>
+
+<script>
+// Set the starting location of the map 
+var latitude = 35.7596;
+var longitude = -79.0193;
+
+// Convert longitude and latitude to the map's projection
+var mapCenter = ol.proj.fromLonLat([longitude, latitude]);
+
+// Set the starting zoom level
+var zoomLevel = 7;
+
+// Create the OpenStreetMap base layer
+var osm = new ol.layer.Tile({
+    source: new ol.source.OSM()
+});
+// Create a GeoJSON layer for North Carolina
+var ncLayer = new ol.layer.Vector({
+source: new ol.source.Vector({
+url: 'https://raw.githubusercontent.com/glynnbird/usstatesgeojson/master/north%20carolina.geojson',
+format: new ol.format.GeoJSON()
+}),
+style: new ol.style.Style({
+fill: new ol.style.Fill({
+    color: 'rgba(255, 165, 0, 0.12)'
+}),
+stroke: new ol.style.Stroke({
+    color: '#d94801',
+    width: 3
+})
+})
+});
+// Create the map
+var map = new ol.Map({
+    target: 'map',
+    layers: [osm, ncLayer],
+    view: new ol.View({
+        center: mapCenter,
+        zoom: zoomLevel
+    })
+});
+
+// Create an earthquake data source
+var earthquakeSource = new ol.source.Vector();
+
+// Create the earthquake heat map
+var heatmapLayer = new ol.layer.Heatmap({
+source: earthquakeSource,
+blur: 20,
+radius: 10,
+visible: false
+});
+
+// Create a cluster source
+var clusterSource = new ol.source.Cluster({
+distance: 40,
+source: earthquakeSource
+});
+
+// Style the earthquake clusters
+var clusterLayer = new ol.layer.Vector({
+source: clusterSource,
+visible: false,
+style: function(feature) {
+    var count = feature.get('features').length;
+
+    return new ol.style.Style({
+        image: new ol.style.Circle({
+            radius: Math.min(10 + count, 25),
+            fill: new ol.style.Fill({
+                color: 'rgba(255, 100, 0, 0.7)'
+            }),
+            stroke: new ol.style.Stroke({
+                color: '#ffffff',
+                width: 2
+            })
+        }),
+        text: new ol.style.Text({
+            text: String(count),
+            fill: new ol.style.Fill({
+                color: '#ffffff'
+            })
+        })
+    });
+}
+});
+
+// Add both layers to the map
+map.addLayer(heatmapLayer);
+map.addLayer(clusterLayer);
+
+// Load earthquake data from the USGS
+fetch('https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_day.geojson')
+.then(function(response) {
+    if (!response.ok) {
+        throw new Error('Could not load earthquake data.');
+    }
+    return response.json();
+})
+.then(function(data) {
+    var features = new ol.format.GeoJSON().readFeatures(data, {
+        featureProjection: map.getView().getProjection()
+    });
+
+    earthquakeSource.addFeatures(features);
+    console.log('Earthquake features loaded:', features.length);
+})
+.catch(function(error) {
+    console.error('Earthquake data error:', error);
+});
+
+
+// Heat map button
+document.getElementById('heatmapButton').onclick = function() {
+heatmapLayer.setVisible(true);
+clusterLayer.setVisible(false);
+
+// Zoom out to show earthquakes worldwide
+map.getView().animate({
+    center: ol.proj.fromLonLat([0, 20]),
+    zoom: 2,
+    duration: 500
+});
+};
+
+// Cluster map button
+document.getElementById('clusterButton').onclick = function() {
+clusterLayer.setVisible(true);
+heatmapLayer.setVisible(false);
+
+// Zoom out to earthquake clusters worldwide
+map.getView().animate({
+    center: ol.proj.fromLonLat([0, 20]),
+    zoom: 2,
+    duration: 500
+});
+};
+// NC map button
+document.getElementById('ncButton').onclick = function() {
+heatmapLayer.setVisible(false);
+clusterLayer.setVisible(false);
+
+map.getView().animate({
+center: mapCenter,
+zoom: zoomLevel,
+duration: 500
+});
+};
+
+</script>
+</body>
+</html>
