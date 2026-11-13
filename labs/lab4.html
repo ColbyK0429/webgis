@@ -1,0 +1,901 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WebGIS Lab 3 - OpenLayers</title>
+
+<!-- OpenLayers stylesheet -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@v10.2.1/ol.css">
+
+<!-- OpenLayers JavaScript library -->
+<script src="https://cdn.jsdelivr.net/npm/ol@v10.2.1/dist/ol.js"></script>
+
+<style>
+#map {
+    width: 100%;
+    height: 600px;
+}
+#covidPanel { margin: 18px 0; font: 14px Arial, sans-serif; }
+#covidPanel button, #covidPanel select { margin: 4px; padding: 6px; }
+#covidStatus { padding: 8px; background: #f3f5f7; }
+#covidCharts { display: flex; flex-wrap: wrap; gap: 20px; margin-top: 12px; }
+#covidCharts canvas { width: min(100%, 520px); height: 260px; border: 1px solid #ddd; }
+#covidLegend { margin: 8px 0; color: #444; }
+#spatialTools { margin: 12px 0; padding: 10px; background: #f7f8fa; }
+#spatialStatus { padding: 6px 0; color: #444; }
+#lisaLegend { display: none; margin: 8px 0; }
+.lisaKey { display: inline-block; margin: 3px 10px 3px 0; }
+.lisaSwatch { display: inline-block; width: 13px; height: 13px; margin-right: 4px; vertical-align: -2px; }
+</style>
+</head>
+
+<body>
+<h2>WebGIS Lab 3 - OpenLayers</h2>
+<h4>Author: Colby Kimball</h4>
+
+
+<div style="margin: 10px 0;">
+<button id="heatmapButton">Earthquake Heat Map</button>
+<button id="clusterButton">Earthquake Cluster Map</button>
+<button id="ncButton">North Carolina Map</button>
+<a href="https://github.com/mtdukes/nc-covid-by-zip" target="_blank" rel="noopener noreferrer">North Carolina COVID-19 by ZIP data</a>
+</div>
+
+<div id="map"></div>
+
+<section id="covidPanel">
+    <h3>North Carolina COVID-19 by ZIP</h3>
+    <div id="covidStatus" role="status">Discovering and inspecting the linked data repository…</div>
+    <label for="metricSelect">Map and chart measure:</label>
+    <select id="metricSelect" disabled><option value="">Loading data…</option></select>
+    <button id="csvExport" disabled>Download cleaned CSV</button>
+    <button id="geojsonExport" disabled>Download cleaned GeoJSON</button>
+    <div id="spatialTools">
+        <strong>Spatial analysis: October 2, 2020</strong><br>
+        <button id="lisaButton" disabled>Show Local Moran's I clusters</button>
+        <button id="countyButton">Hide county boundaries</button>
+        <div id="countyStatus" role="status">Loading North Carolina county boundaries...</div>
+        <div id="spatialStatus" role="status">Loading county boundaries and October 2 case data...</div>
+        <div id="lisaLegend">
+            <span class="lisaKey"><span class="lisaSwatch" style="background:#b2182b"></span>High-High</span>
+            <span class="lisaKey"><span class="lisaSwatch" style="background:#2166ac"></span>Low-Low</span>
+            <span class="lisaKey"><span class="lisaSwatch" style="background:#ef8a62"></span>High-Low</span>
+            <span class="lisaKey"><span class="lisaSwatch" style="background:#67a9cf"></span>Low-High</span>
+            <span class="lisaKey"><span class="lisaSwatch" style="background:#d9d9d9"></span>Not significant</span>
+        </div>
+        <div>Queen contiguity (shared vertices), row-standardized weights, and 999 conditional permutations; cluster colors use uncorrected pseudo-p ≤ 0.05. Click a ZIP polygon for its values.</div>
+    </div>
+    <div id="covidLegend">ZIP polygons are shaded by the selected measure; chart values are aggregated by date.</div>
+    <div id="covidCharts">
+        <canvas id="summaryChart" width="520" height="260" aria-label="Summary of COVID-19 data by ZIP"></canvas>
+        <canvas id="timeChart" width="520" height="260" aria-label="COVID-19 time series"></canvas>
+    </div>
+</section>
+
+<script>
+// Set the starting location of the map 
+var latitude = 35.7596;
+var longitude = -79.0193;
+
+// Convert longitude and latitude to the map's projection
+var mapCenter = ol.proj.fromLonLat([longitude, latitude]);
+
+// Set the starting zoom level
+var zoomLevel = 7;
+
+// Create the OpenStreetMap base layer
+var osm = new ol.layer.Tile({
+    source: new ol.source.OSM()
+});
+// Create a GeoJSON layer for North Carolina
+var ncLayer = new ol.layer.Vector({
+source: new ol.source.Vector({
+url: 'https://raw.githubusercontent.com/glynnbird/usstatesgeojson/master/north%20carolina.geojson',
+format: new ol.format.GeoJSON()
+}),
+style: new ol.style.Style({
+fill: new ol.style.Fill({
+    color: 'rgba(255, 165, 0, 0.12)'
+}),
+stroke: new ol.style.Stroke({
+    color: '#d94801',
+    width: 3
+})
+})
+});
+// Create the map
+var map = new ol.Map({
+    target: 'map',
+    layers: [osm, ncLayer],
+    view: new ol.View({
+        center: mapCenter,
+        zoom: zoomLevel
+    })
+});
+
+// Create an earthquake data source
+var earthquakeSource = new ol.source.Vector();
+
+// Create the earthquake heat map
+var heatmapLayer = new ol.layer.Heatmap({
+source: earthquakeSource,
+blur: 20,
+radius: 10,
+visible: false
+});
+
+// Create a cluster source
+var clusterSource = new ol.source.Cluster({
+distance: 40,
+source: earthquakeSource
+});
+
+// Style the earthquake clusters
+var clusterLayer = new ol.layer.Vector({
+source: clusterSource,
+visible: false,
+style: function(feature) {
+    var count = feature.get('features').length;
+
+    return new ol.style.Style({
+        image: new ol.style.Circle({
+            radius: Math.min(10 + count, 25),
+            fill: new ol.style.Fill({
+                color: 'rgba(255, 100, 0, 0.7)'
+            }),
+            stroke: new ol.style.Stroke({
+                color: '#ffffff',
+                width: 2
+            })
+        }),
+        text: new ol.style.Text({
+            text: String(count),
+            fill: new ol.style.Fill({
+                color: '#ffffff'
+            })
+        })
+    });
+}
+});
+
+// Add both layers to the map
+map.addLayer(heatmapLayer);
+map.addLayer(clusterLayer);
+
+// Load earthquake data from the USGS
+fetch('https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_day.geojson')
+.then(function(response) {
+    if (!response.ok) {
+        throw new Error('Could not load earthquake data.');
+    }
+    return response.json();
+})
+.then(function(data) {
+    var features = new ol.format.GeoJSON().readFeatures(data, {
+        featureProjection: map.getView().getProjection()
+    });
+
+    earthquakeSource.addFeatures(features);
+    console.log('Earthquake features loaded:', features.length);
+})
+.catch(function(error) {
+    console.error('Earthquake data error:', error);
+});
+
+
+// Heat map button
+document.getElementById('heatmapButton').onclick = function() {
+heatmapLayer.setVisible(true);
+clusterLayer.setVisible(false);
+
+// Zoom out to show earthquakes worldwide
+map.getView().animate({
+    center: ol.proj.fromLonLat([0, 20]),
+    zoom: 2,
+    duration: 500
+});
+};
+
+// Cluster map button
+document.getElementById('clusterButton').onclick = function() {
+clusterLayer.setVisible(true);
+heatmapLayer.setVisible(false);
+
+// Zoom out to show earthquake clusters worldwide
+map.getView().animate({
+    center: ol.proj.fromLonLat([0, 20]),
+    zoom: 2,
+    duration: 500
+});
+};
+// North Carolina map button
+document.getElementById('ncButton').onclick = function() {
+heatmapLayer.setVisible(false);
+clusterLayer.setVisible(false);
+
+map.getView().animate({
+center: mapCenter,
+zoom: zoomLevel,
+duration: 500
+});
+};
+
+// Discover the linked data, inspect its fields, and build ZIP-level outputs.
+(function() {
+    var repo = 'mtdukes/nc-covid-by-zip';
+    var covidSource = new ol.source.Vector();
+    var covidLayer = new ol.layer.Vector({
+        source: covidSource,
+        visible: true,
+        style: function(feature) {
+            var value = Number(feature.get('covid_value')) || 0;
+            var max = window.covidMaxValue || 1;
+            var intensity = Math.max(0.12, Math.min(0.85, value / max));
+            return new ol.style.Style({
+                fill: new ol.style.Fill({ color: 'rgba(190, 35, 45, ' + intensity + ')' }),
+                stroke: new ol.style.Stroke({ color: '#ffffff', width: 0.6 })
+            });
+        }
+    });
+    map.addLayer(covidLayer);
+    covidLayer.setZIndex(10);
+
+    var countySource = new ol.source.Vector();
+    var countyLayer = new ol.layer.Vector({
+        source: countySource,
+        visible: true,
+        style: new ol.style.Style({
+            fill: new ol.style.Fill({ color: 'rgba(0,0,0,0)' }),
+            stroke: new ol.style.Stroke({ color: '#263746', width: 1.4 })
+        })
+    });
+    countyLayer.setZIndex(30);
+    map.addLayer(countyLayer);
+
+    var lisaSource = new ol.source.Vector();
+    var lisaLayer = new ol.layer.Vector({
+        source: lisaSource,
+        visible: false,
+        style: function(feature) {
+            var colors = {
+                'High-High': '#b2182b',
+                'Low-Low': '#2166ac',
+                'High-Low': '#ef8a62',
+                'Low-High': '#67a9cf',
+                'Not significant': '#d9d9d9'
+            };
+            return new ol.style.Style({
+                fill: new ol.style.Fill({ color: colors[feature.get('lisa_cluster')] || '#d9d9d9' }),
+                stroke: new ol.style.Stroke({ color: '#ffffff', width: 0.55 })
+            });
+        }
+    });
+    lisaLayer.setZIndex(20);
+    map.addLayer(lisaLayer);
+
+    var records = [];
+    var fields = [];
+    var measures = [];
+    var dateField = null;
+    var zipField = null;
+    var selectedMeasure = null;
+    var boundaryFeaturesByZip = {};
+    var joinedGeoJSON = { type: 'FeatureCollection', features: [] };
+    var statusNode = document.getElementById('covidStatus');
+    var metricSelect = document.getElementById('metricSelect');
+    var countyStatus = document.getElementById('countyStatus');
+    var spatialStatus = document.getElementById('spatialStatus');
+    var lisaButton = document.getElementById('lisaButton');
+    var countyButton = document.getElementById('countyButton');
+    var lisaResults = null;
+
+    function setStatus(message) { statusNode.textContent = message; }
+    function normalize(value) { return String(value || '').toLowerCase().replace(/[^a-z0-9]/g, ''); }
+    function normalizeZip(value) {
+        var digits = String(value == null ? '' : value).replace(/\D/g, '');
+        if (digits.length > 5) return digits.slice(0, 5);
+        return digits ? digits.padStart(5, '0') : '';
+    }
+    function parseCSV(text) {
+        var rows = [], row = [], cell = '', quoted = false;
+        for (var i = 0; i < text.length; i++) {
+            var ch = text[i];
+            if (ch === '"' && quoted && text[i + 1] === '"') { cell += '"'; i++; }
+            else if (ch === '"') quoted = !quoted;
+            else if (ch === ',' && !quoted) { row.push(cell); cell = ''; }
+            else if ((ch === '\n' || ch === '\r') && !quoted) {
+                if (ch === '\r' && text[i + 1] === '\n') i++;
+                row.push(cell); if (row.some(function(v) { return v !== ''; })) rows.push(row);
+                row = []; cell = '';
+            } else cell += ch;
+        }
+        row.push(cell); if (row.some(function(v) { return v !== ''; })) rows.push(row);
+        if (!rows.length) return [];
+        var headers = rows.shift().map(function(v) { return v.trim().replace(/^\uFEFF/, ''); });
+        return rows.map(function(values) {
+            var obj = {};
+            headers.forEach(function(header, index) { obj[header] = (values[index] || '').trim(); });
+            return obj;
+        });
+    }
+    function rowsFromJSON(data) {
+        if (data && data.type === 'FeatureCollection' && Array.isArray(data.features)) {
+            return data.features.map(function(feature) {
+                var row = Object.assign({}, feature.properties || {});
+                if (feature.geometry) row.__geometry = feature.geometry;
+                return row;
+            });
+        }
+        if (Array.isArray(data)) return data;
+        if (data && Array.isArray(data.data)) return data.data;
+        if (data && Array.isArray(data.features)) return rowsFromJSON({ type: 'FeatureCollection', features: data.features });
+        return [];
+    }
+    function chooseField(headers, patterns) {
+        for (var i = 0; i < patterns.length; i++) {
+            var found = headers.find(function(header) { return patterns[i].test(normalize(header)); });
+            if (found) return found;
+        }
+        return null;
+    }
+    function cleanRecords(input) {
+        if (!input.length) throw new Error('The discovered file contained no tabular records.');
+        fields = Object.keys(input[0]).filter(function(key) { return key !== '__geometry'; });
+        zipField = chooseField(fields, [/^(zip|zipcode|zip5|postalcode|zcta)$/]);
+        dateField = chooseField(fields, [/^(date|reportdate| asofdate|timestamp)$/]);
+        if (!dateField) dateField = fields.find(function(key) { return /date|time/i.test(key); }) || null;
+        if (!zipField) zipField = fields.find(function(key) { return /zip|postal|zcta/i.test(key); }) || null;
+        if (!zipField) throw new Error('No ZIP-code field was detected. Fields: ' + fields.join(', '));
+        measures = fields.filter(function(key) {
+            return key !== zipField && key !== dateField && input.some(function(row) {
+                return row[key] !== '' && row[key] != null && isFinite(Number(String(row[key]).replace(/,/g, '')));
+            });
+        });
+        if (!measures.length) throw new Error('No numeric COVID-19 measure was detected.');
+        selectedMeasure = measures.find(function(key) { return /case|positive|death|count|total/i.test(key); }) || measures[0];
+        records = input.map(function(row) {
+            var cleaned = {};
+            fields.forEach(function(key) { cleaned[key] = row[key] == null ? '' : row[key]; });
+            cleaned[zipField] = normalizeZip(row[zipField]);
+            measures.forEach(function(key) {
+                var value = Number(String(row[key] == null ? '' : row[key]).replace(/,/g, ''));
+                cleaned[key] = isFinite(value) ? value : null;
+            });
+            return cleaned;
+        }).filter(function(row) { return /^\d{5}$/.test(row[zipField]); });
+        if (!records.length) throw new Error('No valid five-digit ZIP records were found.');
+        metricSelect.innerHTML = '';
+        measures.forEach(function(key) {
+            var option = document.createElement('option'); option.value = key; option.textContent = key;
+            metricSelect.appendChild(option);
+        });
+        metricSelect.value = selectedMeasure;
+        metricSelect.disabled = false;
+        document.getElementById('csvExport').disabled = false;
+        document.getElementById('geojsonExport').disabled = false;
+    }
+    function latestValues() {
+        var byZip = {};
+        records.forEach(function(row) {
+            var zip = row[zipField], date = dateField ? String(row[dateField]) : '';
+            if (!byZip[zip] || date >= byZip[zip].date) byZip[zip] = { date: date, value: Number(row[selectedMeasure]) || 0 };
+        });
+        return byZip;
+    }
+    function drawCharts() {
+        var latest = latestValues();
+        var summary = document.getElementById('summaryChart').getContext('2d');
+        summary.clearRect(0, 0, 520, 260);
+        summary.fillStyle = '#222'; summary.font = 'bold 15px Arial';
+        summary.fillText('Latest ' + selectedMeasure + ' by ZIP (top 10)', 12, 22);
+        var ranking = Object.keys(latest).map(function(zip) { return { zip: zip, value: latest[zip].value }; })
+            .sort(function(a, b) { return b.value - a.value; }).slice(0, 10);
+        var top = ranking.length ? Math.max.apply(null, ranking.map(function(item) { return item.value; })) : 1;
+        ranking.forEach(function(item, index) {
+            var y = 42 + index * 21, width = Math.max(1, item.value / top * 330);
+            summary.fillStyle = '#d94841'; summary.fillRect(85, y, width, 15);
+            summary.fillStyle = '#222'; summary.font = '12px Arial';
+            summary.fillText(item.zip, 12, y + 12); summary.fillText(String(item.value), 92 + width, y + 12);
+        });
+
+        var time = document.getElementById('timeChart').getContext('2d');
+        time.clearRect(0, 0, 520, 260); time.fillStyle = '#222'; time.font = 'bold 15px Arial';
+        time.fillText(dateField ? selectedMeasure + ' over time' : 'No date field found for time series', 12, 22);
+        if (!dateField) return;
+        var byDate = {};
+        records.forEach(function(row) {
+            var date = String(row[dateField] || '').slice(0, 10), value = Number(row[selectedMeasure]);
+            if (date && isFinite(value)) byDate[date] = (byDate[date] || 0) + value;
+        });
+        var points = Object.keys(byDate).sort().map(function(date) { return { date: date, value: byDate[date] }; });
+        if (!points.length) return;
+        var max = Math.max.apply(null, points.map(function(point) { return point.value; })) || 1;
+        time.beginPath(); time.strokeStyle = '#1676a3'; time.lineWidth = 2;
+        points.forEach(function(point, index) {
+            var x = 14 + index * 490 / Math.max(1, points.length - 1), y = 225 - point.value / max * 180;
+            if (index === 0) time.moveTo(x, y); else time.lineTo(x, y);
+        });
+        time.stroke(); time.fillStyle = '#222'; time.font = '11px Arial';
+        time.fillText(points[0].date, 12, 246); time.fillText(points[points.length - 1].date, 430, 246);
+        time.fillText('Total: ' + points.reduce(function(sum, point) { return sum + point.value; }, 0), 12, 45);
+    }
+    function repaint() {
+        if (!records.length) return;
+        selectedMeasure = metricSelect.value;
+        var latest = latestValues();
+        window.covidMaxValue = Math.max.apply(null, Object.keys(latest).map(function(zip) { return latest[zip].value; })) || 1;
+        Object.keys(boundaryFeaturesByZip).forEach(function(zip) {
+            var item = latest[zip];
+            boundaryFeaturesByZip[zip].forEach(function(feature) {
+                feature.set('covid_value', item ? item.value : null);
+                feature.set('covid_measure', selectedMeasure);
+                feature.set('covid_date', item ? item.date : '');
+            });
+        });
+        covidSource.changed(); drawCharts();
+    }
+    function applyBoundaries(boundaries) {
+        var latest = latestValues();
+        boundaryFeaturesByZip = {};
+        joinedGeoJSON = { type: 'FeatureCollection', features: [] };
+        joinedGeoJSON.features = (boundaries.features || []).filter(function(feature) {
+            var props = feature.properties || {};
+            var rawZip = props.ZIP || props.zip || props.ZCTA5 || props.GEOID || props.ZCTA5CE10 || props.GEOID10 || '';
+            var digits = String(rawZip).replace(/\D/g, '');
+            var zip = digits.length > 5 ? digits.slice(-5) : normalizeZip(digits);
+            if (!zip || !latest[zip]) return false;
+            feature.properties = props;
+            feature.properties.ZIP = zip;
+            feature.properties.covid_value = latest[zip].value;
+            feature.properties.covid_measure = selectedMeasure;
+            feature.properties.covid_date = latest[zip].date;
+            return true;
+        });
+        covidSource.clear();
+        var olFeatures = new ol.format.GeoJSON().readFeatures(joinedGeoJSON, { featureProjection: map.getView().getProjection() });
+        olFeatures.forEach(function(feature) {
+            var zip = String(feature.get('ZIP') || '');
+            if (!boundaryFeaturesByZip[zip]) boundaryFeaturesByZip[zip] = [];
+            boundaryFeaturesByZip[zip].push(feature);
+        });
+        covidSource.addFeatures(olFeatures);
+        var extent = covidSource.getExtent();
+        if (extent && isFinite(extent[0])) map.getView().fit(extent, { padding: [30, 30, 30, 30], maxZoom: 9, duration: 500 });
+        setStatus('Loaded ' + records.length + ' cleaned records across ' + Object.keys(latest).length + ' ZIP codes; matched ' + joinedGeoJSON.features.length + ' ZIP polygons. Fields: ' + fields.join(', '));
+        repaint();
+    }
+function loadBoundaries() {
+    // Census TIGERweb's public 2020 ZCTA layer supports GeoJSON query responses.
+    var baseUrl = 'https://tigerweb.geo.census.gov/arcgis/rest/services/TIGERweb/tigerWMS_Current/MapServer/2/query';
+    var params = new URLSearchParams({
+        where: '1=1',
+        geometry: JSON.stringify({
+            xmin: -84.4,
+            ymin: 33.7,
+            xmax: -75.3,
+            ymax: 36.7,
+            spatialReference: { wkid: 4326 }
+        }),
+        geometryType: 'esriGeometryEnvelope',
+        inSR: '4326',
+        spatialRel: 'esriSpatialRelIntersects',
+        outFields: 'ZCTA5,GEOID,BASENAME',
+        returnGeometry: 'true',
+        outSR: '4326',
+        f: 'geojson'
+    });
+    function validateBoundaryData(data) {
+        if (data.error) {
+            throw new Error(data.error.message || 'Boundary source returned a query error.');
+        }
+        if (data.type !== 'FeatureCollection' || !data.features || !data.features.length) {
+            throw new Error('No ZIP polygons were returned.');
+        }
+        applyBoundaries(data);
+    }
+
+    return fetch(baseUrl + '?' + params.toString())
+        .then(function(response) {
+            if (!response.ok) {
+                throw new Error(
+                    'ZIP boundary service returned HTTP ' +
+                    response.status
+                );
+            }
+            return response.json();
+        })
+        .then(validateBoundaryData)
+        .catch(function(censusError) {
+            // Raw GitHub serves this public, state-level GeoJSON with browser CORS enabled.
+            var fallbackUrl = 'https://raw.githubusercontent.com/OpenDataDE/State-zip-code-GeoJSON/master/nc_north_carolina_zip_codes_geo.min.json';
+            return fetch(fallbackUrl).then(function(response) {
+                if (!response.ok) throw new Error('GitHub boundary file returned HTTP ' + response.status);
+                return response.json();
+            }).then(validateBoundaryData).catch(function(fallbackError) {
+                throw new Error('Census TIGERweb: ' + censusError.message + '; GitHub GeoJSON: ' + fallbackError.message);
+            });
+        });
+}
+
+    function loadCountyBoundaries() {
+        var endpoint = 'https://tigerweb.geo.census.gov/arcgis/rest/services/Census2020/tigerWMS_Census2020/MapServer/82/query';
+        var params = new URLSearchParams({
+            where: "STATE='37'",
+            outFields: 'GEOID,NAME,STATE,COUNTY',
+            returnGeometry: 'true',
+            outSR: '4326',
+            f: 'geojson'
+        });
+        function fetchGeoJSON(url, sourceName) {
+            return fetch(url).then(function(response) {
+                if (!response.ok) throw new Error(sourceName + ' returned HTTP ' + response.status);
+                return response.json();
+            }).then(function(data) {
+                if (data.error) throw new Error(data.error.message || sourceName + ' returned an error.');
+                if (data.type !== 'FeatureCollection' || !data.features || !data.features.length) {
+                    throw new Error(sourceName + ' returned no county polygons.');
+                }
+                return data;
+            });
+        }
+        return fetchGeoJSON(endpoint + '?' + params.toString(), 'Census county service').catch(function(censusError) {
+            var fallback = 'https://gis.rowancountync.gov/arcgis/rest/services/Public/NC_Counties_Information/MapServer/0/query';
+            var fallbackParams = new URLSearchParams({
+                where: '1=1',
+                outFields: '*',
+                returnGeometry: 'true',
+                outSR: '4326',
+                f: 'geojson'
+            });
+            return fetchGeoJSON(fallback + '?' + fallbackParams.toString(), 'North Carolina county fallback').catch(function(fallbackError) {
+                throw new Error('Census: ' + censusError.message + '; North Carolina county service: ' + fallbackError.message);
+            });
+        }).then(function(data) {
+            if (data.error) throw new Error(data.error.message || 'County service returned an error.');
+            if (data.type !== 'FeatureCollection' || !data.features || !data.features.length) {
+                throw new Error('The county service returned no North Carolina polygons.');
+            }
+            countySource.addFeatures(new ol.format.GeoJSON().readFeatures(data, {
+                featureProjection: map.getView().getProjection()
+            }));
+            countyStatus.textContent = 'Loaded ' + countySource.getFeatures().length + ' North Carolina county boundaries.';
+        }).catch(function(error) {
+            countyStatus.textContent = 'County boundaries unavailable: ' + error.message;
+        });
+    }
+
+    function coordinateKeys(geometry) {
+        var keys = Object.create(null);
+        function visit(value) {
+            if (!Array.isArray(value)) return;
+            if (typeof value[0] === 'number' && typeof value[1] === 'number') {
+                keys[value[0].toFixed(5) + ',' + value[1].toFixed(5)] = true;
+                return;
+            }
+            value.forEach(visit);
+        }
+        if (geometry && geometry.coordinates) visit(geometry.coordinates);
+        return Object.keys(keys);
+    }
+
+    function calculateLocalMorans(features) {
+        // Shared polygon vertices define queen neighbors; each feature's neighbor weights sum to one.
+        var count = features.length, valueSum = 0;
+        var values = features.map(function(feature) {
+            var rawValue = feature.properties && feature.properties.Cases;
+            var value = rawValue === null || rawValue === '' ? NaN : Number(rawValue);
+            return isFinite(value) ? value : 0;
+        });
+        values.forEach(function(value) { valueSum += value; });
+        var mean = valueSum / count;
+        var squaredTotal = 0;
+        values.forEach(function(value) { squaredTotal += Math.pow(value - mean, 2); });
+        var standardDeviation = Math.sqrt(squaredTotal / count);
+        if (!standardDeviation) throw new Error('October 2 case counts have no variation.');
+        var z = values.map(function(value) { return (value - mean) / standardDeviation; });
+        var neighbors = features.map(function() { return Object.create(null); });
+        var vertexOwners = Object.create(null);
+
+        features.forEach(function(feature, index) {
+            coordinateKeys(feature.geometry).forEach(function(key) {
+                if (!vertexOwners[key]) vertexOwners[key] = [];
+                vertexOwners[key].push(index);
+            });
+        });
+        Object.keys(vertexOwners).forEach(function(key) {
+            var owners = vertexOwners[key];
+            for (var a = 0; a < owners.length; a++) {
+                for (var b = a + 1; b < owners.length; b++) {
+                    if (owners[a] !== owners[b]) {
+                        neighbors[owners[a]][owners[b]] = true;
+                        neighbors[owners[b]][owners[a]] = true;
+                    }
+                }
+            }
+        });
+
+        var permutations = 999;
+        var randomSeed = 20201002;
+        function seededRandom() {
+            randomSeed = (randomSeed * 1664525 + 1013904223) >>> 0;
+            return randomSeed / 4294967296;
+        }
+        var results = features.map(function(feature, index) {
+            var neighborIndexes = Object.keys(neighbors[index]).map(Number);
+            var neighborCount = neighborIndexes.length;
+            var lag = neighborCount ? neighborIndexes.reduce(function(sum, neighbor) {
+                return sum + z[neighbor];
+            }, 0) / neighborCount : 0;
+            // Local Moran's I is the standardized case count multiplied by the spatially lagged z-score.
+            var localI = z[index] * lag;
+            var extreme = 0;
+            if (neighborCount) {
+                for (var iteration = 0; iteration < permutations; iteration++) {
+                    var selected = Object.create(null), simulatedLag = 0, selectedCount = 0;
+                    while (selectedCount < neighborCount) {
+                        var sampled = Math.floor(seededRandom() * (count - 1));
+                        if (sampled >= index) sampled++;
+                        if (!selected[sampled]) {
+                            selected[sampled] = true;
+                            simulatedLag += z[sampled];
+                            selectedCount++;
+                        }
+                    }
+                    var simulatedI = z[index] * simulatedLag / neighborCount;
+                    if (Math.abs(simulatedI) >= Math.abs(localI)) extreme++;
+                }
+            }
+            var pValue = neighborCount ? (extreme + 1) / (permutations + 1) : 1;
+            var cluster = 'Not significant';
+            if (pValue <= 0.05 && neighborCount) {
+                if (z[index] >= 0 && lag >= 0) cluster = 'High-High';
+                else if (z[index] < 0 && lag < 0) cluster = 'Low-Low';
+                else if (z[index] >= 0 && lag < 0) cluster = 'High-Low';
+                else cluster = 'Low-High';
+            }
+            var props = Object.assign({}, feature.properties || {});
+            props.ZIP = normalizeZip(props.ZIPCode || props.ZIP || props.zip);
+            props.cases_2020_10_02 = values[index];
+            props.local_morans_i = localI;
+            props.local_morans_p = pValue;
+            props.local_morans_z = z[index];
+            props.local_morans_lag = lag;
+            props.lisa_cluster = cluster;
+            return { type: 'Feature', geometry: feature.geometry, properties: props };
+        });
+        return { features: results, mean: mean, neighborCounts: neighbors.map(function(row) { return Object.keys(row).length; }), permutations: permutations };
+    }
+
+    function loadOctober2LocalMoran() {
+        var localUrl = 'nc-covid-by-zip/time_series_data/reduced_geojson/nc_zip1002.json';
+        var githubUrl = 'https://raw.githubusercontent.com/mtdukes/nc-covid-by-zip/master/time_series_data/reduced_geojson/nc_zip1002.json';
+        function parseSnapshot(response) {
+            if (!response.ok) throw new Error('October 2 COVID data returned HTTP ' + response.status);
+            return response.json();
+        }
+        return fetch(localUrl).then(parseSnapshot).catch(function() {
+            return fetch(githubUrl).then(parseSnapshot);
+        }).then(function(data) {
+            if (data.type !== 'FeatureCollection' || !data.features || !data.features.length) {
+                throw new Error('October 2 data is not a GeoJSON FeatureCollection.');
+            }
+            var analyzableFeatures = data.features.filter(function(feature) {
+                var cases = feature.properties && feature.properties.Cases;
+                return feature.geometry && cases !== null && cases !== '' && isFinite(Number(cases));
+            });
+            if (!analyzableFeatures.length) throw new Error('No October 2 ZIP features have both geometry and case counts.');
+            lisaResults = calculateLocalMorans(analyzableFeatures);
+            lisaSource.addFeatures(new ol.format.GeoJSON().readFeatures({
+                type: 'FeatureCollection', features: lisaResults.features
+            }, { featureProjection: map.getView().getProjection() }));
+            var totals = { 'High-High': 0, 'Low-Low': 0, 'High-Low': 0, 'Low-High': 0, 'Not significant': 0 };
+            lisaResults.features.forEach(function(feature) { totals[feature.properties.lisa_cluster]++; });
+            var matched = lisaSource.getFeatures().length;
+            lisaButton.disabled = false;
+            spatialStatus.textContent = 'Local Moran’s I analyzed ' + matched + ' ZIP codes for October 2, 2020 (' + (data.features.length - matched) + ' omitted for missing case counts or geometry; queen contiguity; 999 permutations). Significant clusters: HH ' + totals['High-High'] + ', LL ' + totals['Low-Low'] + ', HL ' + totals['High-Low'] + ', LH ' + totals['Low-High'] + '; mean cases ' + lisaResults.mean.toFixed(1) + '.';
+        }).catch(function(error) {
+            spatialStatus.textContent = 'Local Moran’s I unavailable: ' + error.message;
+        });
+    }
+
+    lisaButton.onclick = function() {
+        var show = !lisaLayer.getVisible();
+        lisaLayer.setVisible(show);
+        covidLayer.setVisible(!show);
+        document.getElementById('lisaLegend').style.display = show ? 'block' : 'none';
+        lisaButton.textContent = show ? 'Show COVID measure map' : "Show Local Moran's I clusters";
+    };
+    countyButton.onclick = function() {
+        var show = !countyLayer.getVisible();
+        countyLayer.setVisible(show);
+        countyButton.textContent = show ? 'Hide county boundaries' : 'Show county boundaries';
+    };
+    map.on('singleclick', function(event) {
+        if (!lisaLayer.getVisible()) return;
+        var selectedFeature = null;
+        map.forEachFeatureAtPixel(event.pixel, function(feature, layer) {
+            if (layer === lisaLayer) {
+                selectedFeature = feature;
+                return true;
+            }
+            return false;
+        });
+        if (selectedFeature) {
+            spatialStatus.textContent = 'ZIP ' + selectedFeature.get('ZIP') + ': ' + selectedFeature.get('lisa_cluster') +
+                '; October 2 cases ' + selectedFeature.get('cases_2020_10_02') +
+                '; Local Moran’s I ' + Number(selectedFeature.get('local_morans_i')).toFixed(4) +
+                '; permutation p ' + Number(selectedFeature.get('local_morans_p')).toFixed(3) + '.';
+        }
+    });
+    loadCountyBoundaries();
+    loadOctober2LocalMoran();
+
+    function discoverData() {
+    var repoBranch = 'master';
+    fetch('https://api.github.com/repos/' + repo)
+        .then(function(response) {
+            if (!response.ok) {
+                throw new Error('GitHub repository could not be accessed.');
+            }
+            return response.json();
+        })
+        .then(function(info) {
+            repoBranch = info.default_branch || repoBranch;
+            window.__covidRepoBranch = repoBranch;
+
+            return fetch(
+                'https://api.github.com/repos/' + repo +
+                '/git/trees/' + encodeURIComponent(repoBranch) +
+                '?recursive=1'
+            );
+        })
+        .then(function(response) {
+            if (!response.ok) {
+                throw new Error('Could not inspect repository files.');
+            }
+            return response.json();
+        })
+        .then(function(tree) {
+            var csvFiles = (tree.tree || []).filter(function(file) {
+                return file.type === 'blob' &&
+                    file.path.indexOf('time_series_data/csv/') === 0 &&
+                    /nc_zip.*\.csv$/i.test(file.path);
+            });
+
+            if (!csvFiles.length) {
+                throw new Error(
+                    'No NC ZIP-code CSV files were found.'
+                );
+            }
+
+            setStatus(
+                'Found ' + csvFiles.length +
+                ' ZIP-code CSV files. Downloading data...'
+            );
+
+            return Promise.all(csvFiles.map(function(file) {
+                var url = 'https://raw.githubusercontent.com/' + repo + '/' +
+                    encodeURIComponent(repoBranch) +
+                    '/' + file.path.split('/').map(encodeURIComponent).join('/');
+
+                return fetch(url).then(function(response) {
+                    if (!response.ok) {
+                        throw new Error(
+                            'Could not download ' + file.path
+                        );
+                    }
+                    return response.text();
+                }).then(function(text) {
+                    return {
+                        path: file.path,
+                        rows: parseCSV(text)
+                    };
+                });
+            })).then(function(fileResults) {
+                var input = [];
+
+                fileResults.forEach(function(result) {
+                    var rows = result.rows;
+                    if (!rows.length) return;
+
+                    var headers = Object.keys(rows[0]);
+
+                    function findHeader(name) {
+                        return headers.find(function(header) {
+                            return normalize(header) === name;
+                        });
+                    }
+
+                    var zipHeader = findHeader('zipcode');
+                    var casesHeader = findHeader('cases');
+                    var deathsHeader = findHeader('deaths');
+
+                    if (!zipHeader || !casesHeader || !deathsHeader) {
+                        throw new Error(
+                            'Missing ZIPCode, Cases, or Deaths in ' +
+                            result.path + '. Found: ' + headers.join(', ')
+                        );
+                    }
+
+                    var dateMatch = result.path.match(/nc_zip(\d{4})\.csv$/i);
+
+                    rows.forEach(function(row) {
+                        var cleanedRow = {
+                            ZIPCode: row[zipHeader],
+                            Cases: row[casesHeader],
+                            Deaths: row[deathsHeader]
+                        };
+
+                        if (dateMatch) {
+                            cleanedRow.date = dateMatch[1];
+                        }
+
+                        input.push(cleanedRow);
+                    });
+                });
+
+                setStatus(
+                    'Loaded ' + csvFiles.length + ' files and ' +
+                    input.length + ' rows.'
+                );
+
+                cleanRecords(input);
+                drawCharts();
+
+                loadBoundaries().catch(function(error) {
+                    setStatus(
+                        'Data loaded, but ZIP boundaries were unavailable: ' +
+                        error.message
+                    );
+
+                    joinedGeoJSON = {
+                        type: 'FeatureCollection',
+                        features: records.map(function(row) {
+                            var props = Object.assign({}, row);
+                            props.covid_value = row[selectedMeasure];
+
+                            return {
+                                type: 'Feature',
+                                geometry: row.__geometry || null,
+                                properties: props
+                            };
+                        })
+                    };
+                });
+            });
+        })
+        .catch(function(error) {
+            setStatus('COVID data could not be loaded: ' + error.message);
+        });
+}
+
+    function download(name, text, type) {
+        var link = document.createElement('a');
+        link.href = URL.createObjectURL(new Blob([text], { type: type }));
+        link.download = name; link.click(); URL.revokeObjectURL(link.href);
+    }
+    function csvEscape(value) { return '"' + String(value == null ? '' : value).replace(/"/g, '""') + '"'; }
+    document.getElementById('csvExport').onclick = function() {
+        var header = fields.concat(['selected_measure', 'selected_value']);
+        var lines = [header.map(csvEscape).join(',')];
+        records.forEach(function(row) { lines.push(fields.map(function(key) { return csvEscape(row[key]); }).concat([csvEscape(selectedMeasure), csvEscape(row[selectedMeasure])]).join(',')); });
+        download('nc-covid-by-zip-cleaned.csv', lines.join('\r\n'), 'text/csv;charset=utf-8');
+    };
+    document.getElementById('geojsonExport').onclick = function() {
+        if (!joinedGeoJSON.features.length) {
+            joinedGeoJSON = { type: 'FeatureCollection', features: records.map(function(row) {
+                var props = Object.assign({}, row); props.covid_value = row[selectedMeasure]; props.covid_measure = selectedMeasure;
+                return { type: 'Feature', geometry: row.__geometry || null, properties: props };
+            }) };
+        }
+        download('nc-covid-by-zip-cleaned.geojson', JSON.stringify(joinedGeoJSON), 'application/geo+json');
+    };
+    metricSelect.onchange = repaint;
+    discoverData();
+})();
+
+</script>
+</body>
+</html>
